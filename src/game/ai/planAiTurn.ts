@@ -1,4 +1,11 @@
-import { WEAPONS, WEAPON_ORDER } from "../content/definitions";
+import {
+  ANGLE_MAX,
+  ANGLE_MIN,
+  POWER_MAX,
+  POWER_MIN,
+  WEAPONS,
+  WEAPON_ORDER
+} from "../content/definitions";
 import { createSeededRandom } from "../core/random";
 import { estimateShotCommandScore, getActiveTank } from "../core/simulation";
 import type {
@@ -14,6 +21,9 @@ interface DifficultyConfig {
   angleJitter: number;
   powerJitter: number;
   targetJitter: number;
+  executionAngleJitter: number;
+  executionPowerJitter: number;
+  executionTargetJitter: number;
 }
 
 const DIFFICULTY_CONFIG: Record<TankState["aiDifficulty"], DifficultyConfig> = {
@@ -22,21 +32,30 @@ const DIFFICULTY_CONFIG: Record<TankState["aiDifficulty"], DifficultyConfig> = {
     powerStep: 10,
     angleJitter: 7,
     powerJitter: 8,
-    targetJitter: 5
+    targetJitter: 5,
+    executionAngleJitter: 7,
+    executionPowerJitter: 9,
+    executionTargetJitter: 6
   },
   medium: {
-    angleStep: 8,
-    powerStep: 7,
-    angleJitter: 4,
-    powerJitter: 5,
-    targetJitter: 3
+    angleStep: 10,
+    powerStep: 9,
+    angleJitter: 5,
+    powerJitter: 6,
+    targetJitter: 4,
+    executionAngleJitter: 3,
+    executionPowerJitter: 4,
+    executionTargetJitter: 3.5
   },
   hard: {
     angleStep: 5,
     powerStep: 5,
     angleJitter: 2,
     powerJitter: 2.5,
-    targetJitter: 1.5
+    targetJitter: 1.5,
+    executionAngleJitter: 0.75,
+    executionPowerJitter: 1,
+    executionTargetJitter: 1
   }
 };
 
@@ -85,7 +104,9 @@ export function planAiTurn(match: MatchState): MatchCommand[] {
     return [...commands, { type: "fire" }];
   }
 
-  if (bestShot.score < 16 && tank.currentFuel >= 5) {
+  const plannedShot = applyExecutionVariance(bestShot, match, difficulty, random);
+
+  if (plannedShot.score < 16 && tank.currentFuel >= 5) {
     const direction = target.x > tank.x ? 1 : -1;
     const steps = 2 + Math.floor(random() * 3);
 
@@ -94,21 +115,21 @@ export function planAiTurn(match: MatchState): MatchCommand[] {
     }
   }
 
-  if (bestShot.weaponId !== tank.selectedWeaponId) {
-    commands.push({ type: "selectWeapon", weaponId: bestShot.weaponId });
+  if (plannedShot.weaponId !== tank.selectedWeaponId) {
+    commands.push({ type: "selectWeapon", weaponId: plannedShot.weaponId });
   }
 
   commands.push({
     type: "adjustAngle",
-    delta: bestShot.angleDeg - tank.angleDeg
+    delta: plannedShot.angleDeg - tank.angleDeg
   });
   commands.push({
     type: "adjustPower",
-    delta: bestShot.power - tank.power
+    delta: plannedShot.power - tank.power
   });
 
-  if (typeof bestShot.targetX === "number") {
-    commands.push({ type: "fire", targetX: bestShot.targetX });
+  if (typeof plannedShot.targetX === "number") {
+    commands.push({ type: "fire", targetX: plannedShot.targetX });
   } else {
     commands.push({ type: "fire" });
   }
@@ -197,6 +218,50 @@ function findBestShot(
   return bestShot;
 }
 
+function applyExecutionVariance(
+  shot: {
+    weaponId: WeaponId;
+    score: number;
+    angleDeg: number;
+    power: number;
+    targetX?: number;
+  },
+  match: MatchState,
+  difficulty: DifficultyConfig,
+  random: () => number
+): {
+  weaponId: WeaponId;
+  score: number;
+  angleDeg: number;
+  power: number;
+  targetX?: number;
+} {
+  if (typeof shot.targetX === "number") {
+    return {
+      ...shot,
+      targetX: clamp(
+        shot.targetX + jitter(random, difficulty.executionTargetJitter),
+        0,
+        match.arenaWidth
+      )
+    };
+  }
+
+  return {
+    ...shot,
+    angleDeg: clamp(
+      shot.angleDeg + jitter(random, difficulty.executionAngleJitter),
+      ANGLE_MIN,
+      ANGLE_MAX
+    ),
+    power: clamp(
+      shot.power + jitter(random, difficulty.executionPowerJitter),
+      POWER_MIN,
+      POWER_MAX
+    )
+  };
+}
+
 function pickTarget(tank: TankState, enemies: TankState[]): TankState {
   return [...enemies].sort((left, right) => {
     const leftScore =
@@ -248,4 +313,8 @@ function hashId(value: string): number {
   }
 
   return hash;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
