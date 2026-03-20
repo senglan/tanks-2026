@@ -197,6 +197,10 @@ select {
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--tank-color) 18%, transparent);
 }
 
+.card--locked {
+  border-style: dashed;
+}
+
 .card--dim {
   opacity: 0.45;
 }
@@ -209,6 +213,7 @@ select {
   margin-bottom: 0.75rem;
 }
 
+.card__meta,
 .setup-card__meta,
 .color-field,
 .color-preview {
@@ -216,9 +221,19 @@ select {
   align-items: center;
 }
 
+.card__meta,
 .setup-card__meta,
 .color-field {
   gap: 0.6rem;
+}
+
+.card__meta,
+.setup-card__meta {
+  flex-wrap: wrap;
+}
+
+.card__meta {
+  margin-bottom: 0.65rem;
 }
 
 .color-field {
@@ -331,6 +346,10 @@ select {
   margin: 0.18rem 0;
   font-size: 0.92rem;
   color: #dbeafe;
+}
+
+.match-status {
+  margin: 0.25rem 0 0;
 }
 
 .accordion {
@@ -461,9 +480,26 @@ select {
 }
 
 .team-badge,
+.controller-badge,
 .muted,
 .targeting {
   color: #cbd5e1;
+}
+
+.team-badge,
+.controller-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.55rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.55);
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
+.locked-note {
+  margin: 0.8rem 0 0;
 }
 
 .targeting {

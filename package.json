@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "test": "tsx --test src/game/core/terrain.test.ts src/game/core/simulation.test.ts src/game/storage/profileStorage.test.ts",
+    "test": "tsx --test src/game/ai/planAiTurn.test.ts src/game/ai/planAiStore.test.ts src/game/core/session.test.ts src/game/core/terrain.test.ts src/game/core/simulation.test.ts src/game/storage/profileStorage.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

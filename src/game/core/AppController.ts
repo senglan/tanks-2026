@@ -5,6 +5,7 @@ import {
   POWER_STEP,
   WEAPONS
 } from "../content/definitions";
+import { planAiStoreActions, type AiStoreAction } from "../ai/planAiStore";
 import { planAiTurn } from "../ai/planAiTurn";
 import { buildMatchConfig, canStartAnotherRound, createDefaultSetupState, createSession, mergeRoundIntoSession, purchaseItem, purchaseUpgrade, purchaseWeapon, startNextRound } from "./session";
 import {
@@ -64,6 +65,9 @@ export class AppController {
   private lastFrameTime = performance.now();
   private simulationAccumulator = 0;
   private roundTransitionTimer = 0;
+  private automationTimer = 0;
+  private automationScreen: AppState["screen"] | null = null;
+  private processedStoreRound: number | null = null;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -101,6 +105,7 @@ export class AppController {
     this.simulationAccumulator += deltaSeconds;
 
     this.processMatchFlow(deltaSeconds);
+    this.processScreenAutomation(deltaSeconds);
     this.shell.render({
       screen: this.state.screen,
       message: this.state.message,
@@ -122,6 +127,10 @@ export class AppController {
 
     if (!match || this.state.screen !== "match") {
       return;
+    }
+
+    if (!this.hasHumanTurnInput()) {
+      this.clearHumanTurnState();
     }
 
     if (match.phase === "command") {
@@ -201,7 +210,8 @@ export class AppController {
       return;
     }
 
-    const command = this.aiQueue.commands.shift();
+    const queue = this.aiQueue;
+    const command = queue.commands.shift();
 
     if (!command) {
       this.aiQueue = null;
@@ -210,6 +220,11 @@ export class AppController {
     }
 
     this.executeMatchCommand(command, true);
+
+    if (this.aiQueue !== queue) {
+      return;
+    }
+
     this.aiQueue.delay = command.type === "fire" || command.type === "teleport" ? 0.32 : 0.16;
 
     if (this.aiQueue.commands.length === 0) {
@@ -247,6 +262,81 @@ export class AppController {
     }
   }
 
+  private processScreenAutomation(deltaSeconds: number): void {
+    if (this.automationScreen !== this.state.screen) {
+      this.automationScreen = this.state.screen;
+      this.automationTimer = 0;
+    }
+
+    const session = this.state.session;
+
+    if (!session) {
+      return;
+    }
+
+    if (this.state.screen === "roundSummary") {
+      if (!this.isAiOnlySession(session)) {
+        return;
+      }
+
+      this.automationTimer += deltaSeconds;
+
+      if (this.automationTimer >= 1) {
+        this.advanceFromRoundSummary();
+      }
+
+      return;
+    }
+
+    if (this.state.screen !== "store") {
+      return;
+    }
+
+    this.processAiStorePhase(session);
+
+    if (!this.isAiOnlySession(session)) {
+      return;
+    }
+
+    this.automationTimer += deltaSeconds;
+
+    if (this.automationTimer >= 1.2) {
+      this.beginNextRound();
+    }
+  }
+
+  private processAiStorePhase(session: NonNullable<AppState["session"]>): void {
+    if (this.processedStoreRound === session.roundIndex) {
+      return;
+    }
+
+    const aiTanks = session.roster.filter((tank) => tank.controller === "ai");
+
+    if (aiTanks.length === 0) {
+      this.processedStoreRound = session.roundIndex;
+      return;
+    }
+
+    let purchasesMade = 0;
+
+    for (const tank of aiTanks) {
+      const actions = planAiStoreActions(session, tank.id);
+
+      for (const action of actions) {
+        if (this.applyAiStoreAction(action)) {
+          purchasesMade += 1;
+        }
+      }
+    }
+
+    this.processedStoreRound = session.roundIndex;
+    this.automationTimer = 0;
+
+    if (purchasesMade > 0) {
+      this.setMessage("AI tanks completed store purchases.");
+    }
+  }
+
   private handleShellAction(action: ShellAction): void {
     this.sound.touch();
 
@@ -256,11 +346,16 @@ export class AppController {
         this.state.screen = action.screen;
         this.state.inputMode = { kind: "normal" };
         this.targetPreviewX = null;
+        this.clearHeldInputs();
 
         if (action.screen === "mainMenu" || action.screen === "matchSetup" || action.screen === "profiles") {
           if (action.screen !== "profiles") {
             this.state.session = action.screen === "mainMenu" ? null : this.state.session;
           }
+        }
+        if (action.screen === "mainMenu") {
+          this.roundSummary = null;
+          this.processedStoreRound = null;
         }
         this.setMessage("");
         return;
@@ -287,35 +382,53 @@ export class AppController {
         this.startMatchSession();
         return;
       case "matchFire":
+        if (!this.hasHumanTurnInput()) {
+          return;
+        }
         this.handleFireIntent();
         return;
       case "matchDraw":
+        if (!this.hasHumanTurnInput()) {
+          return;
+        }
         this.executeMatchCommand({ type: "declareDraw" });
         return;
       case "cycleWeapon":
+        if (!this.hasHumanTurnInput()) {
+          return;
+        }
         this.executeMatchCommand({ type: "cycleWeapon", direction: action.direction });
         return;
       case "selectWeapon":
+        if (!this.hasHumanTurnInput()) {
+          return;
+        }
         this.executeMatchCommand({ type: "selectWeapon", weaponId: action.weaponId });
         return;
       case "useItem":
+        if (!this.hasHumanTurnInput()) {
+          return;
+        }
         this.handleItemIntent(action.itemId);
         return;
       case "cancelTargeting":
+        if (!this.hasHumanTurnInput()) {
+          return;
+        }
         this.state.inputMode = { kind: "normal" };
         this.targetPreviewX = null;
         this.setMessage("Targeting canceled.");
         return;
       case "continueAfterRound":
         this.sound.playUiClick();
-        if (this.state.session && canStartAnotherRound(this.state.session)) {
-          this.state.screen = "store";
-        } else {
-          this.state.screen = "matchSummary";
-        }
+        this.advanceFromRoundSummary();
         return;
       case "purchaseWeapon":
         if (action.weaponId !== "basicShell" && this.state.session) {
+          if (!this.canManageStoreTank(action.tankId)) {
+            this.setMessage("AI-managed tanks shop automatically.");
+            return;
+          }
           const message = purchaseWeapon(this.state.session, action.tankId, action.weaponId);
           if (!message.startsWith("Not enough")) {
             this.sound.playPurchase();
@@ -325,6 +438,10 @@ export class AppController {
         return;
       case "purchaseItem":
         if (this.state.session) {
+          if (!this.canManageStoreTank(action.tankId)) {
+            this.setMessage("AI-managed tanks shop automatically.");
+            return;
+          }
           const message = purchaseItem(this.state.session, action.tankId, action.itemId);
           if (!message.startsWith("Not enough")) {
             this.sound.playPurchase();
@@ -334,6 +451,10 @@ export class AppController {
         return;
       case "purchaseUpgrade":
         if (this.state.session) {
+          if (!this.canManageStoreTank(action.tankId)) {
+            this.setMessage("AI-managed tanks shop automatically.");
+            return;
+          }
           const message = purchaseUpgrade(
             this.state.session,
             action.tankId,
@@ -350,6 +471,10 @@ export class AppController {
         return;
       case "saveProfile":
         this.sound.playUiClick();
+        if (!this.canManageStoreTank(action.tankId)) {
+          this.setMessage("AI-managed tanks cannot be edited from the store.");
+          return;
+        }
         this.saveRosterTankProfile(action.tankId);
         return;
       case "deleteProfile":
@@ -366,12 +491,7 @@ export class AppController {
       case "startNextRound":
         if (this.state.session) {
           this.sound.playUiClick();
-          startNextRound(this.state.session);
-          this.state.screen = "match";
-          this.roundSummary = null;
-          this.state.inputMode = { kind: "normal" };
-          this.targetPreviewX = null;
-          this.setMessage(`Round ${this.state.session.roundIndex} started.`);
+          this.beginNextRound();
         }
         return;
       case "finishMatch":
@@ -417,14 +537,8 @@ export class AppController {
   private startMatchSession(): void {
     const config = buildMatchConfig(this.state.setup, this.state.saveFile);
     this.state.session = createSession(config);
-    startNextRound(this.state.session);
-    this.state.screen = "match";
-    this.state.inputMode = { kind: "normal" };
-    this.targetPreviewX = null;
-    this.roundSummary = null;
-    this.aiQueue = null;
-    this.aiThinkTimer = 0.45;
-    this.setMessage("Match started.");
+    this.processedStoreRound = null;
+    this.beginNextRound("Match started.");
   }
 
   private handleItemIntent(itemId: keyof typeof ITEMS): void {
@@ -473,7 +587,7 @@ export class AppController {
   }
 
   private handlePointerClick(worldX: number): void {
-    if (this.state.inputMode.kind !== "targeting") {
+    if (this.state.inputMode.kind !== "targeting" || !this.hasHumanTurnInput()) {
       return;
     }
 
@@ -490,7 +604,10 @@ export class AppController {
   }
 
   private handlePointerHover(worldX: number | null): void {
-    this.targetPreviewX = this.state.inputMode.kind === "targeting" ? worldX : null;
+    this.targetPreviewX =
+      this.state.inputMode.kind === "targeting" && this.hasHumanTurnInput()
+        ? worldX
+        : null;
   }
 
   private executeMatchCommand(command: MatchCommand, quiet = false): void {
@@ -574,7 +691,7 @@ export class AppController {
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
-    if (this.state.screen !== "match") {
+    if (this.state.screen !== "match" || !this.hasHumanTurnInput()) {
       return;
     }
 
@@ -680,4 +797,95 @@ export class AppController {
         break;
     }
   };
+
+  private hasHumanTurnInput(): boolean {
+    const match = this.state.session?.currentRound;
+
+    if (!match || this.state.screen !== "match" || match.phase !== "command") {
+      return false;
+    }
+
+    return getActiveTank(match)?.controller === "human";
+  }
+
+  private clearHumanTurnState(): void {
+    this.clearHeldInputs();
+    this.commandRepeatAccumulator = 0;
+
+    if (this.state.inputMode.kind !== "normal") {
+      this.state.inputMode = { kind: "normal" };
+    }
+
+    this.targetPreviewX = null;
+  }
+
+  private clearHeldInputs(): void {
+    this.heldInputs.left = false;
+    this.heldInputs.right = false;
+    this.heldInputs.up = false;
+    this.heldInputs.down = false;
+    this.heldInputs.powerUp = false;
+    this.heldInputs.powerDown = false;
+  }
+
+  private isAiOnlySession(session: NonNullable<AppState["session"]>): boolean {
+    return session.roster.every((tank) => tank.controller === "ai");
+  }
+
+  private canManageStoreTank(tankId: string): boolean {
+    const tank = this.state.session?.roster.find((candidate) => candidate.id === tankId);
+
+    return tank?.controller === "human";
+  }
+
+  private advanceFromRoundSummary(): void {
+    if (!this.state.session) {
+      return;
+    }
+
+    this.state.screen = canStartAnotherRound(this.state.session)
+      ? "store"
+      : "matchSummary";
+  }
+
+  private beginNextRound(message?: string): void {
+    if (!this.state.session) {
+      return;
+    }
+
+    startNextRound(this.state.session);
+    this.state.screen = "match";
+    this.roundSummary = null;
+    this.processedStoreRound = null;
+    this.state.inputMode = { kind: "normal" };
+    this.targetPreviewX = null;
+    this.aiQueue = null;
+    this.aiThinkTimer = 0.45;
+    this.commandRepeatAccumulator = 0;
+    this.clearHeldInputs();
+    this.setMessage(message ?? `Round ${this.state.session.roundIndex} started.`);
+  }
+
+  private applyAiStoreAction(action: AiStoreAction): boolean {
+    if (!this.state.session) {
+      return false;
+    }
+
+    switch (action.type) {
+      case "purchaseWeapon":
+        return !purchaseWeapon(this.state.session, action.tankId, action.weaponId).startsWith(
+          "Not enough"
+        );
+      case "purchaseItem":
+        return !purchaseItem(this.state.session, action.tankId, action.itemId).startsWith(
+          "Not enough"
+        );
+      case "purchaseUpgrade": {
+        const message = purchaseUpgrade(this.state.session, action.tankId, action.upgradeId);
+        return !message.startsWith("Not enough") && !message.endsWith("already maxed.");
+      }
+      default:
+        return false;
+    }
+  }
 }

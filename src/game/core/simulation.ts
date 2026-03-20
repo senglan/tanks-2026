@@ -33,7 +33,6 @@ import type {
 const GRAVITY = 30;
 const WIND_ACCELERATION = 1.45;
 const TANK_HIT_RADIUS = 1.35;
-const PROJECTILE_LIFE_LIMIT = 10;
 
 export function getActiveTank(match: MatchState): TankState | null {
   return match.tanks[match.activeTankIndex] ?? null;
@@ -116,7 +115,6 @@ export function stepMatch(match: MatchState, deltaSeconds: number): void {
       projectile.x < 0 ||
       projectile.x > match.arenaWidth ||
       projectile.y <= match.terrain.floor ||
-      projectile.y > match.arenaHeight + PROJECTILE_LIFE_LIMIT ||
       projectile.y <= terrainHeight
     ) {
       explodeProjectile(

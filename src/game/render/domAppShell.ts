@@ -72,6 +72,12 @@ export class DomAppShell {
   }
 
   render(view: ShellViewState): void {
+    const activeMatch = view.session?.currentRound ?? null;
+    const activeTank = activeMatch
+      ? (activeMatch.tanks[activeMatch.activeTankIndex] ?? null)
+      : null;
+    const aiTurnActive =
+      view.screen === "match" && activeTank?.controller === "ai";
     const statusText =
       view.targetingLabel ??
       (view.screen === "match"
@@ -86,7 +92,7 @@ export class DomAppShell {
           </div>
           ${
             view.screen === "match"
-              ? `<button class="button" data-action="match-draw">Declare Draw</button>`
+              ? `<button class="button" data-action="match-draw" ${aiTurnActive ? "disabled" : ""}>Declare Draw</button>`
               : `<div class="status-pill">${escapeHtml(statusText)}</div>`
           }
         </header>
@@ -280,7 +286,7 @@ function renderMainMenu(): string {
   return `
     <section class="panel hero">
       <div class="hero__copy">
-        <h2>EXPLOSIVE HOT-SEAT TANK COMBAT</h2>
+        <h2>EXPLOSIVE 2026 TANK COMBAT</h2>
         <p>Tactical artillery duels with customizable tanks, smart opponents, and upgrades that carry forward.</p>
       </div>
       <div class="hero__actions">
@@ -295,6 +301,10 @@ function renderSetup(setup: MatchSetupState, saveFile: SaveFileV1): string {
   const slots = setup.slots
     .map((slot, index) => {
       const enabled = index < setup.tankCount;
+      const controllerLabel = formatControllerLabel(
+        slot.controller,
+        slot.aiDifficulty,
+      );
       const profileOptions = [
         `<option value="">Fresh Tank</option>`,
         ...saveFile.profiles.map(
@@ -311,6 +321,7 @@ function renderSetup(setup: MatchSetupState, saveFile: SaveFileV1): string {
             <h3>${escapeHtml(slot.displayName)}</h3>
             <div class="setup-card__meta">
               <span class="color-chip" style="background:${slot.color}"></span>
+              <span class="controller-badge">${escapeHtml(controllerLabel)}</span>
               <span class="team-badge">${escapeHtml(slot.teamId)}</span>
             </div>
           </div>
@@ -462,10 +473,15 @@ function renderMatch(view: ShellViewState): string {
   }
 
   const activeTank = match.tanks[match.activeTankIndex];
+  const controlsDisabled = activeTank.controller === "ai";
+  const controllerLabel = formatControllerLabel(
+    activeTank.controller,
+    activeTank.aiDifficulty,
+  );
   const weaponButtons = Object.values(WEAPONS)
     .map((weapon) => {
       const ammo = activeTank.weaponInventory[weapon.id];
-      const available = ammo === -1 || ammo > 0;
+      const available = (ammo === -1 || ammo > 0) && !controlsDisabled;
 
       return `
         <button
@@ -486,7 +502,7 @@ function renderMatch(view: ShellViewState): string {
           class="button"
           data-action="use-item"
           data-item-id="${item.id}"
-          ${activeTank.itemInventory[item.id] > 0 ? "" : "disabled"}
+          ${activeTank.itemInventory[item.id] > 0 && !controlsDisabled ? "" : "disabled"}
         >
           ${item.name} x${activeTank.itemInventory[item.id]}
         </button>
@@ -500,10 +516,12 @@ function renderMatch(view: ShellViewState): string {
         <div class="panel__header">
           <h2>Actions</h2>
         </div>
+        <p class="muted match-status"><strong>Controller:</strong> ${escapeHtml(controllerLabel)}</p>
+        ${controlsDisabled ? `<p class="muted match-status">AI is taking this turn.</p>` : ""}
         ${view.targetingLabel ? `<p class="targeting">${escapeHtml(view.targetingLabel)}</p>` : ""}
         ${
           view.targetingLabel
-            ? `<div class="button-row"><button class="button" data-action="cancel-targeting">Cancel</button></div>`
+            ? `<div class="button-row"><button class="button" data-action="cancel-targeting" ${controlsDisabled ? "disabled" : ""}>Cancel</button></div>`
             : ""
         }
         <details class="stack accordion" open>
@@ -517,6 +535,7 @@ function renderMatch(view: ShellViewState): string {
       </div>
       <aside class="match-readout panel">
         <p><strong>Active:</strong> ${escapeHtml(activeTank.displayName)}</p>
+        <p><strong>Controller:</strong> ${escapeHtml(controllerLabel)}</p>
         <p><strong>HP:</strong> ${activeTank.currentHp}/${activeTank.maxHp}</p>
         <p><strong>Shield:</strong> ${activeTank.shieldHp}</p>
         <p><strong>Fuel:</strong> ${activeTank.currentFuel.toFixed(0)}</p>
@@ -568,6 +587,12 @@ function renderStore(session: MatchSession | null): string {
 
   const tankCards = session.roster
     .map((tank) => {
+      const aiManaged = tank.controller === "ai";
+      const controllerLabel = formatControllerLabel(
+        tank.controller,
+        tank.aiDifficulty,
+      );
+      const disabled = aiManaged ? "disabled" : "";
       const weaponButtons = (Object.keys(WEAPONS) as WeaponId[])
         .filter((weaponId) => weaponId !== "basicShell")
         .map(
@@ -577,6 +602,7 @@ function renderStore(session: MatchSession | null): string {
               data-action="buy-weapon"
               data-tank-id="${tank.id}"
               data-weapon-id="${weaponId}"
+              ${disabled}
             >
               ${WEAPONS[weaponId].name} ($${WEAPONS[weaponId].cost})
             </button>
@@ -591,6 +617,7 @@ function renderStore(session: MatchSession | null): string {
               data-action="buy-item"
               data-tank-id="${tank.id}"
               data-item-id="${itemId}"
+              ${disabled}
             >
               ${ITEMS[itemId].name} ($${ITEMS[itemId].cost})
             </button>
@@ -607,6 +634,7 @@ function renderStore(session: MatchSession | null): string {
               data-action="buy-upgrade"
               data-tank-id="${tank.id}"
               data-upgrade-id="${upgradeId}"
+              ${disabled}
             >
               ${UPGRADES[upgradeId].name} Lv.${tank.upgrades[upgradeId]} ($${baseCost})
             </button>
@@ -615,10 +643,14 @@ function renderStore(session: MatchSession | null): string {
         .join("");
 
       return `
-        <article class="card">
+        <article class="card ${aiManaged ? "card--locked" : ""}">
           <div class="card__header">
             <h3>${escapeHtml(tank.displayName)}</h3>
             <span class="color-chip" style="background:${tank.color}"></span>
+          </div>
+          <div class="card__meta">
+            <span class="controller-badge">${escapeHtml(controllerLabel)}</span>
+            <span class="team-badge">${escapeHtml(tank.teamId)}</span>
           </div>
           <p>Money: $${tank.money}</p>
           <p>Score: ${tank.score}</p>
@@ -637,8 +669,9 @@ function renderStore(session: MatchSession | null): string {
             <div class="button-grid">${upgradeButtons}</div>
           </div>
           <div class="button-row">
-            <button class="button" data-action="save-profile" data-tank-id="${tank.id}">Save Profile</button>
+            <button class="button" data-action="save-profile" data-tank-id="${tank.id}" ${disabled}>Save Profile</button>
           </div>
+          ${aiManaged ? `<p class="muted locked-note">AI-managed store purchases are automatic.</p>` : ""}
         </article>
       `;
     })
@@ -726,6 +759,21 @@ function screenLabel(screen: AppScreen): string {
     default:
       return "";
   }
+}
+
+function formatControllerLabel(
+  controller: "human" | "ai",
+  aiDifficulty: "easy" | "medium" | "hard",
+): string {
+  if (controller === "human") {
+    return "Human";
+  }
+
+  return `AI · ${capitalize(aiDifficulty)}`;
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function escapeHtml(value: string): string {

@@ -88,6 +88,40 @@ test("explosions continue decaying during command phase", () => {
   assert.equal(match.explosions.length, 0);
 });
 
+test("steep shots can travel above the arena without triggering a ceiling hit", () => {
+  const match = createTestMatch(false);
+  const attacker = match.tanks[0];
+
+  attacker.angleDeg = 89;
+  attacker.power = 86;
+  match.tanks[1].x = 132;
+
+  applyCommand(match, { type: "fire" });
+
+  let highestY = Number.NEGATIVE_INFINITY;
+  let safety = 0;
+
+  while (match.projectiles.length > 0 && safety < 240) {
+    stepMatch(match, FIXED_STEP_SECONDS);
+    const projectile = match.projectiles[0];
+
+    if (projectile) {
+      highestY = Math.max(highestY, projectile.y);
+
+      if (projectile.y > match.arenaHeight + 10) {
+        break;
+      }
+    }
+
+    safety += 1;
+  }
+
+  assert.ok(highestY > match.arenaHeight + 10);
+  assert.equal(match.phase, "resolving");
+  assert.equal(match.projectiles.length, 1);
+  assert.equal(match.explosions.length, 0);
+});
+
 function createTestMatch(teamMode: boolean) {
   const persistentA = createFreshPersistentState();
   const persistentB = createFreshPersistentState();
