@@ -1,0 +1,21 @@
+{
+  "name": "tanks-2026",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "tsx --test src/game/core/terrain.test.ts src/game/core/simulation.test.ts src/game/storage/profileStorage.test.ts",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^8.56.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.1"
+  }
+}
