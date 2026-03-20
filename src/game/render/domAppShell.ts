@@ -1,4 +1,9 @@
-import { ITEMS, UPGRADES, WEAPONS, WEATHER_PRESETS } from "../content/definitions";
+import {
+  ITEMS,
+  UPGRADES,
+  WEAPONS,
+  WEATHER_PRESETS,
+} from "../content/definitions";
 import type {
   AppScreen,
   ItemId,
@@ -8,7 +13,7 @@ import type {
   SaveFileV1,
   UpgradeId,
   WeatherPreset,
-  WeaponId
+  WeaponId,
 } from "../core/types";
 
 export type ShellAction =
@@ -60,7 +65,7 @@ export class DomAppShell {
 
   constructor(
     private readonly root: HTMLElement,
-    private readonly onAction: (action: ShellAction) => void
+    private readonly onAction: (action: ShellAction) => void,
   ) {
     this.root.addEventListener("click", this.handleClick);
     this.root.addEventListener("change", this.handleChange);
@@ -70,14 +75,14 @@ export class DomAppShell {
     const statusText =
       view.targetingLabel ??
       (view.screen === "match"
-        ? view.session?.currentRound?.announcement ?? view.message
+        ? (view.session?.currentRound?.announcement ?? view.message)
         : view.message || screenLabel(view.screen));
     const markup = `
       <div class="shell ${view.screen === "match" ? "shell--match" : ""}">
         <header class="shell__topbar">
           <div>
             <h1 class="brand">Tanks 2026</h1>
-            <p class="brand__sub">Browser-first artillery skirmish</p>
+            <p class="brand__sub">Action-packed artillery skirmish</p>
           </div>
           ${
             view.screen === "match"
@@ -111,7 +116,7 @@ export class DomAppShell {
       case "goto":
         this.onAction({
           type: "goto",
-          screen: actionElement.dataset.screen as Exclude<AppScreen, "match">
+          screen: actionElement.dataset.screen as Exclude<AppScreen, "match">,
         });
         return;
       case "start-match":
@@ -126,19 +131,19 @@ export class DomAppShell {
       case "cycle-weapon":
         this.onAction({
           type: "cycleWeapon",
-          direction: actionElement.dataset.direction === "prev" ? -1 : 1
+          direction: actionElement.dataset.direction === "prev" ? -1 : 1,
         });
         return;
       case "select-weapon":
         this.onAction({
           type: "selectWeapon",
-          weaponId: actionElement.dataset.weaponId as WeaponId
+          weaponId: actionElement.dataset.weaponId as WeaponId,
         });
         return;
       case "use-item":
         this.onAction({
           type: "useItem",
-          itemId: actionElement.dataset.itemId as ItemId
+          itemId: actionElement.dataset.itemId as ItemId,
         });
         return;
       case "cancel-targeting":
@@ -151,33 +156,33 @@ export class DomAppShell {
         this.onAction({
           type: "purchaseWeapon",
           tankId: actionElement.dataset.tankId as string,
-          weaponId: actionElement.dataset.weaponId as WeaponId
+          weaponId: actionElement.dataset.weaponId as WeaponId,
         });
         return;
       case "buy-item":
         this.onAction({
           type: "purchaseItem",
           tankId: actionElement.dataset.tankId as string,
-          itemId: actionElement.dataset.itemId as ItemId
+          itemId: actionElement.dataset.itemId as ItemId,
         });
         return;
       case "buy-upgrade":
         this.onAction({
           type: "purchaseUpgrade",
           tankId: actionElement.dataset.tankId as string,
-          upgradeId: actionElement.dataset.upgradeId as UpgradeId
+          upgradeId: actionElement.dataset.upgradeId as UpgradeId,
         });
         return;
       case "save-profile":
         this.onAction({
           type: "saveProfile",
-          tankId: actionElement.dataset.tankId as string
+          tankId: actionElement.dataset.tankId as string,
         });
         return;
       case "delete-profile":
         this.onAction({
           type: "deleteProfile",
-          profileId: actionElement.dataset.profileId as string
+          profileId: actionElement.dataset.profileId as string,
         });
         return;
       case "start-next-round":
@@ -202,25 +207,25 @@ export class DomAppShell {
       case "tank-count":
         this.onAction({
           type: "setTankCount",
-          value: Number(target.value) as 2 | 3 | 4
+          value: Number(target.value) as 2 | 3 | 4,
         });
         return;
       case "round-limit":
         this.onAction({
           type: "setRoundLimit",
-          value: Number(target.value)
+          value: Number(target.value),
         });
         return;
       case "weather-preset":
         this.onAction({
           type: "setWeatherPreset",
-          value: target.value as WeatherPreset
+          value: target.value as WeatherPreset,
         });
         return;
       case "team-mode":
         this.onAction({
           type: "setTeamMode",
-          value: (target as HTMLInputElement).checked
+          value: (target as HTMLInputElement).checked,
         });
         return;
       default:
@@ -245,7 +250,7 @@ export class DomAppShell {
       type: "updateSetupSlot",
       slotId,
       field,
-      value: target.value
+      value: target.value,
     });
   };
 }
@@ -275,8 +280,8 @@ function renderMainMenu(): string {
   return `
     <section class="panel hero">
       <div class="hero__copy">
-        <h2>Turn-based browser artillery</h2>
-        <p>Local 2 to 4 tank matches, hot-seat play, AI, store upgrades, and browser saves.</p>
+        <h2>EXPLOSIVE HOT-SEAT TANK COMBAT</h2>
+        <p>Tactical artillery duels with customizable tanks, smart opponents, and upgrades that carry forward.</p>
       </div>
       <div class="hero__actions">
         <button class="button button--primary" data-action="goto" data-screen="matchSetup">New Match</button>
@@ -296,8 +301,8 @@ function renderSetup(setup: MatchSetupState, saveFile: SaveFileV1): string {
           (profile) =>
             `<option value="${profile.id}" ${
               slot.selectedProfileId === profile.id ? "selected" : ""
-            }>${escapeHtml(profile.displayName)}</option>`
-        )
+            }>${escapeHtml(profile.displayName)}</option>`,
+        ),
       ].join("");
 
       return `
@@ -312,15 +317,15 @@ function renderSetup(setup: MatchSetupState, saveFile: SaveFileV1): string {
           <label class="field">
             <span>Name</span>
             <input data-slot-id="${slot.id}" data-field="displayName" value="${escapeHtml(
-              slot.displayName
+              slot.displayName,
             )}" ${enabled ? "" : "disabled"} />
           </label>
           <label class="field">
             <span>Color</span>
             <div class="color-field">
               <input type="color" data-slot-id="${slot.id}" data-field="color" value="${slot.color}" ${
-        enabled ? "" : "disabled"
-      } />
+                enabled ? "" : "disabled"
+              } />
               <span class="color-preview">
                 <span class="color-chip" style="background:${slot.color}"></span>
                 ${slot.color.toUpperCase()}
@@ -337,8 +342,8 @@ function renderSetup(setup: MatchSetupState, saveFile: SaveFileV1): string {
           <label class="field">
             <span>AI Difficulty</span>
             <select data-slot-id="${slot.id}" data-field="aiDifficulty" ${
-        enabled ? "" : "disabled"
-      }>
+              enabled ? "" : "disabled"
+            }>
               <option value="easy" ${slot.aiDifficulty === "easy" ? "selected" : ""}>Easy</option>
               <option value="medium" ${slot.aiDifficulty === "medium" ? "selected" : ""}>Medium</option>
               <option value="hard" ${slot.aiDifficulty === "hard" ? "selected" : ""}>Hard</option>
@@ -356,8 +361,8 @@ function renderSetup(setup: MatchSetupState, saveFile: SaveFileV1): string {
           <label class="field">
             <span>Profile</span>
             <select data-slot-id="${slot.id}" data-field="selectedProfileId" ${
-        enabled ? "" : "disabled"
-      }>
+              enabled ? "" : "disabled"
+            }>
               ${profileOptions}
             </select>
           </label>
@@ -397,7 +402,7 @@ function renderSetup(setup: MatchSetupState, saveFile: SaveFileV1): string {
                 (preset) =>
                   `<option value="${preset.id}" ${
                     setup.weatherPreset === preset.id ? "selected" : ""
-                  }>${preset.label}</option>`
+                  }>${preset.label}</option>`,
               )
               .join("")}
           </select>
@@ -429,7 +434,7 @@ function renderProfiles(saveFile: SaveFileV1): string {
           <p class="muted">Updated ${new Date(profile.updatedAt).toLocaleString()}</p>
           <button class="button" data-action="delete-profile" data-profile-id="${profile.id}">Delete</button>
         </article>
-      `
+      `,
     )
     .join("");
 
@@ -485,7 +490,7 @@ function renderMatch(view: ShellViewState): string {
         >
           ${item.name} x${activeTank.itemInventory[item.id]}
         </button>
-      `
+      `,
     )
     .join("");
 
@@ -538,7 +543,7 @@ function renderRoundSummary(roundSummary: RoundSummary | null): string {
           <span>${tank.score} score</span>
           <span>${tank.damageDealt} dmg</span>
         </div>
-      `
+      `,
     )
     .join("");
 
@@ -575,7 +580,7 @@ function renderStore(session: MatchSession | null): string {
             >
               ${WEAPONS[weaponId].name} ($${WEAPONS[weaponId].cost})
             </button>
-          `
+          `,
         )
         .join("");
       const itemButtons = (Object.keys(ITEMS) as ItemId[])
@@ -589,12 +594,13 @@ function renderStore(session: MatchSession | null): string {
             >
               ${ITEMS[itemId].name} ($${ITEMS[itemId].cost})
             </button>
-          `
+          `,
         )
         .join("");
       const upgradeButtons = (Object.keys(UPGRADES) as UpgradeId[])
         .map((upgradeId) => {
-          const baseCost = UPGRADES[upgradeId].cost + tank.upgrades[upgradeId] * 4;
+          const baseCost =
+            UPGRADES[upgradeId].cost + tank.upgrades[upgradeId] * 4;
           return `
             <button
               class="button"
@@ -665,7 +671,7 @@ function renderMatchSummary(session: MatchSession | null): string {
           <span>Round ${summary.roundNumber}</span>
           <span>${escapeHtml(summary.outcome.reason)}</span>
         </div>
-      `
+      `,
     )
     .join("");
 
@@ -679,7 +685,7 @@ function renderMatchSummary(session: MatchSession | null): string {
           <span>${tank.roundsWon} wins</span>
           <span>${tank.totalDamageDealt} dmg</span>
         </div>
-      `
+      `,
     )
     .join("");
 
