@@ -78,6 +78,8 @@ export class DomAppShell {
       : null;
     const aiTurnActive =
       view.screen === "match" && activeTank?.controller === "ai";
+    const inputLocked =
+      view.screen === "match" && Boolean(view.targetingLabel);
     const statusText =
       view.targetingLabel ??
       (view.screen === "match"
@@ -92,8 +94,10 @@ export class DomAppShell {
           </div>
           ${
             view.screen === "match"
-              ? `<button class="button" data-action="match-draw" ${aiTurnActive ? "disabled" : ""}>Declare Draw</button>`
-              : `<div class="status-pill">${escapeHtml(statusText)}</div>`
+              ? `<button class="button" data-action="match-draw" ${aiTurnActive || inputLocked ? "disabled" : ""}>Declare Draw</button>`
+              : view.screen === "mainMenu"
+                ? ""
+                : `<div class="status-pill">${escapeHtml(statusText)}</div>`
           }
         </header>
         ${renderScreen(view)}
@@ -286,8 +290,8 @@ function renderMainMenu(): string {
   return `
     <section class="panel hero">
       <div class="hero__copy">
-        <h2>EXPLOSIVE 2026 TANK COMBAT</h2>
-        <p>Tactical artillery duels with customizable tanks, smart opponents, and upgrades that carry forward.</p>
+        <h2>Realistic 2026 TANK COMBAT</h2>
+        <p>Tactical artillery duels with customizable tanks, smart opponents, and upgrades that carry forward. So hard, you'll be shellshocked!</p>
       </div>
       <div class="hero__actions">
         <button class="button button--primary" data-action="goto" data-screen="matchSetup">New Match</button>
@@ -474,14 +478,16 @@ function renderMatch(view: ShellViewState): string {
 
   const activeTank = match.tanks[match.activeTankIndex];
   const controlsDisabled = activeTank.controller === "ai";
+  const commandLocked = controlsDisabled || Boolean(view.targetingLabel);
   const controllerLabel = formatControllerLabel(
     activeTank.controller,
     activeTank.aiDifficulty,
   );
+  const statusText = match.announcement ?? view.message;
   const weaponButtons = Object.values(WEAPONS)
     .map((weapon) => {
       const ammo = activeTank.weaponInventory[weapon.id];
-      const available = (ammo === -1 || ammo > 0) && !controlsDisabled;
+      const available = (ammo === -1 || ammo > 0) && !commandLocked;
 
       return `
         <button
@@ -502,7 +508,7 @@ function renderMatch(view: ShellViewState): string {
           class="button"
           data-action="use-item"
           data-item-id="${item.id}"
-          ${activeTank.itemInventory[item.id] > 0 && !controlsDisabled ? "" : "disabled"}
+          ${activeTank.itemInventory[item.id] > 0 && !commandLocked ? "" : "disabled"}
         >
           ${item.name} x${activeTank.itemInventory[item.id]}
         </button>
@@ -517,6 +523,7 @@ function renderMatch(view: ShellViewState): string {
           <h2>Actions</h2>
         </div>
         <p class="muted match-status"><strong>Controller:</strong> ${escapeHtml(controllerLabel)}</p>
+        <p class="muted match-status">${escapeHtml(statusText)}</p>
         ${controlsDisabled ? `<p class="muted match-status">AI is taking this turn.</p>` : ""}
         ${view.targetingLabel ? `<p class="targeting">${escapeHtml(view.targetingLabel)}</p>` : ""}
         ${
@@ -769,7 +776,7 @@ function formatControllerLabel(
     return "Human";
   }
 
-  return `AI · ${capitalize(aiDifficulty)}`;
+  return `AI - ${capitalize(aiDifficulty)}`;
 }
 
 function capitalize(value: string): string {

@@ -12,6 +12,10 @@ import {
   TANK_HALF_WIDTH,
   WEAPON_ORDER
 } from "../content/definitions";
+import {
+  chooseAirStrikeRunDirection,
+  getAirStrikeFeedbackFromAccuracy
+} from "./airStrike";
 import { ECONOMY, WEAPONS, getEngineMoveMultiplier } from "../content/definitions";
 import {
   canMoveTo,
@@ -22,6 +26,7 @@ import {
   sampleTerrainHeight
 } from "./terrain";
 import type {
+  AirStrikeRunState,
   MatchCommand,
   MatchState,
   ProjectileState,
@@ -69,7 +74,13 @@ export function applyCommand(match: MatchState, command: MatchCommand): string {
     case "useItem":
       return useItem(activeTank, command.type === "useItem" ? command.itemId : "shield");
     case "fire":
-      return fireWeapon(match, activeTank, command.targetX);
+      return fireWeapon(
+        match,
+        activeTank,
+        command.targetX,
+        command.airStrikeAccuracy,
+        command.airStrikeFeedback
+      );
     case "teleport":
       return teleportTank(match, activeTank, command.targetX);
     case "declareDraw":
@@ -81,6 +92,8 @@ export function applyCommand(match: MatchState, command: MatchCommand): string {
 }
 
 export function stepMatch(match: MatchState, deltaSeconds: number): void {
+  updateAirStrikeRun(match, deltaSeconds);
+
   if (match.phase !== "resolving") {
     updateExplosions(match, deltaSeconds);
     return;
@@ -148,6 +161,7 @@ export function cloneMatchState(match: MatchState): MatchState {
     })),
     projectiles: match.projectiles.map((projectile) => ({ ...projectile })),
     explosions: match.explosions.map((explosion) => ({ ...explosion })),
+    airStrikeRun: match.airStrikeRun ? { ...match.airStrikeRun } : null,
     outcome: match.outcome ? { ...match.outcome } : null
   };
 }
@@ -313,7 +327,9 @@ function useItem(tank: TankState, itemId: "shield" | "repairKit"): string {
 function fireWeapon(
   match: MatchState,
   tank: TankState,
-  targetX?: number
+  targetX?: number,
+  airStrikeAccuracy?: number,
+  airStrikeFeedback?: "Perfect" | "Good" | "Off"
 ): string {
   const weapon = WEAPONS[tank.selectedWeaponId];
 
@@ -329,9 +345,19 @@ function fireWeapon(
     tank.weaponInventory[weapon.id] -= 1;
   }
 
-  match.projectiles = createProjectiles(match, tank, weapon.id, targetX);
+  const created = createProjectiles(match, tank, weapon.id, targetX, airStrikeAccuracy);
+  const feedback =
+    weapon.id === "airStrike"
+      ? (airStrikeFeedback ?? getAirStrikeFeedbackFromAccuracy(created.airStrikeAccuracy))
+      : null;
+
+  match.projectiles = created.projectiles;
+  match.airStrikeRun = created.airStrikeRun;
   match.phase = "resolving";
-  match.announcement = `${tank.displayName} fired ${weapon.name}.`;
+  match.announcement =
+    feedback === null
+      ? `${tank.displayName} fired ${weapon.name}.`
+      : `${tank.displayName} called ${weapon.name} (${feedback}).`;
 
   return match.announcement;
 }
@@ -455,35 +481,29 @@ function createProjectiles(
   match: MatchState,
   tank: TankState,
   weaponId: WeaponId,
-  targetX?: number
-): ProjectileState[] {
+  targetX?: number,
+  airStrikeAccuracy?: number
+): {
+  projectiles: ProjectileState[];
+  airStrikeRun: AirStrikeRunState | null;
+  airStrikeAccuracy: number;
+} {
   const weapon = WEAPONS[weaponId];
+
+  if (weapon.id === "airStrike") {
+    return createAirStrikeProjectiles(
+      match,
+      tank,
+      weapon.id,
+      clamp(targetX ?? tank.x, 0, match.arenaWidth),
+      airStrikeAccuracy
+    );
+  }
+
   const projectiles: ProjectileState[] = [];
   const baseSpeed = weapon.muzzleVelocity * (tank.power / 50);
 
   for (let index = 0; index < weapon.projectileCount; index += 1) {
-    if (weapon.targeted) {
-      const spread = (index - (weapon.projectileCount - 1) / 2) * 1.8;
-      const spawnX = clamp((targetX ?? tank.x) + spread, 0, match.arenaWidth);
-      projectiles.push({
-        id: `${weapon.id}-${index}-${Date.now()}-${Math.random()}`,
-        ownerTankId: tank.id,
-        ownerTeamId: tank.teamId,
-        weaponId,
-        x: spawnX,
-        y: AIRSTRIKE_SPAWN_HEIGHT,
-        vx: match.wind.force * 0.14,
-        vy: -weapon.muzzleVelocity,
-        radius: 0.3,
-        damage: weapon.damage,
-        splashRadius: weapon.splashRadius,
-        terrainRadius: weapon.terrainRadius,
-        terrainDepth: weapon.terrainDepth,
-        spawnDelay: index * weapon.projectileDelay
-      });
-      continue;
-    }
-
     const spread = weapon.projectileCount === 1
       ? 0
       : (index - (weapon.projectileCount - 1) / 2) * weapon.spreadDeg;
@@ -507,7 +527,86 @@ function createProjectiles(
     });
   }
 
-  return projectiles;
+  return {
+    projectiles,
+    airStrikeRun: null,
+    airStrikeAccuracy: 1
+  };
+}
+
+function createAirStrikeProjectiles(
+  match: MatchState,
+  tank: TankState,
+  weaponId: "airStrike",
+  targetX: number,
+  airStrikeAccuracy?: number
+): {
+  projectiles: ProjectileState[];
+  airStrikeRun: AirStrikeRunState;
+  airStrikeAccuracy: number;
+} {
+  const weapon = WEAPONS[weaponId];
+  const accuracy = clamp(airStrikeAccuracy ?? 0.72, 0.22, 1);
+  const spreadScale = 1 + (1 - accuracy) * 0.45;
+  const direction = chooseAirStrikeRunDirection(
+    match.seed,
+    match.turnNumber,
+    tank.id,
+    targetX
+  );
+  const lineLength = (10 + weapon.projectileCount * 2) * spreadScale;
+  const lineStart = targetX - lineLength / 2;
+  const driftVelocity = direction * (2.2 + (1 - accuracy) * 1.6);
+  const spawnY = AIRSTRIKE_SPAWN_HEIGHT + 1;
+  const runSpan = lineLength + 12;
+  const runDuration = Math.max(
+    0.8,
+    (weapon.projectileCount - 1) * weapon.projectileDelay + 1.25
+  );
+  const runStartX = clamp(targetX - direction * (runSpan / 2), -10, match.arenaWidth + 10);
+  const runEndX = clamp(targetX + direction * (runSpan / 2), -10, match.arenaWidth + 10);
+  const projectiles: ProjectileState[] = [];
+
+  for (let index = 0; index < weapon.projectileCount; index += 1) {
+    const alpha = weapon.projectileCount === 1 ? 0.5 : index / (weapon.projectileCount - 1);
+    const jitterSign = index % 2 === 0 ? -1 : 1;
+    const lateralJitter = jitterSign * (1 - accuracy) * 0.55;
+    const spawnX = clamp(lineStart + alpha * lineLength + lateralJitter, 0, match.arenaWidth);
+
+    projectiles.push({
+      id: `${weapon.id}-${match.roundNumber}-${match.turnNumber}-${tank.id}-${index}`,
+      ownerTankId: tank.id,
+      ownerTeamId: tank.teamId,
+      weaponId,
+      x: spawnX,
+      y: spawnY,
+      vx: driftVelocity,
+      vy: -weapon.muzzleVelocity * (0.86 + (1 - accuracy) * 0.08),
+      radius: 0.3,
+      damage: weapon.damage,
+      splashRadius: weapon.splashRadius * spreadScale,
+      terrainRadius: weapon.terrainRadius * spreadScale,
+      terrainDepth: weapon.terrainDepth,
+      spawnDelay: index * weapon.projectileDelay
+    });
+  }
+
+  return {
+    projectiles,
+    airStrikeRun: {
+      id: `airstrike-run-${match.roundNumber}-${match.turnNumber}-${tank.id}`,
+      ownerTankId: tank.id,
+      direction,
+      centerX: targetX,
+      startX: runStartX,
+      endX: runEndX,
+      entryY: AIRSTRIKE_SPAWN_HEIGHT + 6,
+      diveDepth: 8 + (1 - accuracy) * 2.6,
+      elapsed: 0,
+      duration: runDuration
+    },
+    airStrikeAccuracy: accuracy
+  };
 }
 
 function explodeProjectile(
@@ -516,12 +615,14 @@ function explodeProjectile(
   impactX: number,
   impactY: number
 ): void {
-  carveCrater(
-    match.terrain,
-    impactX,
-    projectile.terrainRadius,
-    projectile.terrainDepth
-  );
+  if (projectile.terrainRadius > 0 && projectile.terrainDepth > 0) {
+    carveCrater(
+      match.terrain,
+      impactX,
+      projectile.terrainRadius,
+      projectile.terrainDepth
+    );
+  }
   match.explosions.push({
     id: `${projectile.id}-explosion`,
     x: impactX,
@@ -653,6 +754,21 @@ function updateExplosions(match: MatchState, deltaSeconds: number): void {
       ttl: explosion.ttl - deltaSeconds
     }))
     .filter((explosion) => explosion.ttl > 0);
+}
+
+function updateAirStrikeRun(match: MatchState, deltaSeconds: number): void {
+  if (!match.airStrikeRun) {
+    return;
+  }
+
+  match.airStrikeRun.elapsed += deltaSeconds;
+
+  if (
+    match.airStrikeRun.elapsed >= match.airStrikeRun.duration + 0.05 ||
+    (match.phase !== "resolving" && match.projectiles.length === 0)
+  ) {
+    match.airStrikeRun = null;
+  }
 }
 
 function hasWeaponAmmo(tank: TankState, weaponId: WeaponId): boolean {

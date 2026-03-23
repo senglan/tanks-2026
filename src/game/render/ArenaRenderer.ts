@@ -26,6 +26,13 @@ export interface ArenaRenderState {
   match: MatchState | null;
   targetPreviewX: number | null;
   targeting: boolean;
+  timingMeter: {
+    targetX: number;
+    meterValue: number;
+    sweetCenter: number;
+    sweetWidth: number;
+    running: boolean;
+  } | null;
 }
 
 export class ArenaRenderer {
@@ -40,9 +47,13 @@ export class ArenaRenderer {
   private readonly clouds: Mesh[] = [];
   private activeTankMarker: Mesh | null = null;
   private activeTankBeam: LinesMesh | null = null;
+  private warthogRoot: TransformNode | null = null;
   private terrainMesh: Mesh | null = null;
   private terrainLine: LinesMesh | null = null;
   private targetMarker: LinesMesh | null = null;
+  private timingMeterBar: Mesh | null = null;
+  private timingMeterSweetZone: Mesh | null = null;
+  private timingMeterCursor: Mesh | null = null;
   private terrainRevision = -1;
   private activeWidth = 140;
   private activeHeight = 54;
@@ -90,13 +101,17 @@ export class ArenaRenderer {
       this.updateTanks(state.match);
       this.updateProjectiles(state.match);
       this.updateExplosions(state.match);
+      this.updateAirStrikeRun(state.match.airStrikeRun);
       this.updateClouds(state.match.wind.force);
       this.updateTargetMarker(state.targeting ? state.targetPreviewX : null);
+      this.updateTimingMeter(state.timingMeter);
     } else {
       this.hideAllDynamics();
       this.updateCameraBounds(this.activeWidth, this.activeHeight);
       this.updateClouds(0);
       this.updateTargetMarker(null);
+      this.updateTimingMeter(null);
+      this.updateAirStrikeRun(null);
     }
 
     this.scene.render();
@@ -287,6 +302,67 @@ export class ArenaRenderer {
     }
   }
 
+  private updateAirStrikeRun(run: MatchState["airStrikeRun"]): void {
+    if (!run) {
+      this.warthogRoot?.setEnabled(false);
+      return;
+    }
+
+    this.ensureWarthog();
+    const progress = clamp(run.elapsed / Math.max(0.001, run.duration), 0, 1);
+    const x = run.startX + (run.endX - run.startX) * progress;
+    const diveArc = Math.sin(progress * Math.PI);
+    const y = run.entryY - diveArc * run.diveDepth;
+    const pitch = Math.cos(progress * Math.PI) * 0.22;
+
+    this.warthogRoot!.setEnabled(true);
+    this.warthogRoot!.position.set(x, y, -0.92);
+    this.warthogRoot!.rotation.z = run.direction === 1 ? -pitch : Math.PI + pitch;
+  }
+
+  private updateTimingMeter(timingMeter: ArenaRenderState["timingMeter"]): void {
+    if (!timingMeter) {
+      this.timingMeterBar?.setEnabled(false);
+      this.timingMeterSweetZone?.setEnabled(false);
+      this.timingMeterCursor?.setEnabled(false);
+      return;
+    }
+
+    this.ensureTimingMeter();
+
+    const meterWidth = 14;
+    const meterY = this.activeHeight - 7;
+    const baseX = timingMeter.targetX;
+    const sweetWidth = meterWidth * timingMeter.sweetWidth;
+    const sweetOffsetX = (timingMeter.sweetCenter - 0.5) * meterWidth;
+    const cursorOffsetX = (timingMeter.meterValue - 0.5) * meterWidth;
+
+    this.timingMeterBar!.setEnabled(true);
+    this.timingMeterSweetZone!.setEnabled(true);
+    this.timingMeterCursor!.setEnabled(true);
+
+    this.timingMeterBar!.position.set(baseX, meterY, -0.82);
+    this.timingMeterBar!.scaling.set(meterWidth, 0.72, 1);
+
+    this.timingMeterSweetZone!.position.set(baseX + sweetOffsetX, meterY, -0.83);
+    this.timingMeterSweetZone!.scaling.set(sweetWidth, 0.58, 1);
+    this.timingMeterSweetZone!.material = this.getMaterial(
+      timingMeter.running ? "timing-sweet-running" : "timing-sweet-ready",
+      timingMeter.running ? "#16a34a" : "#eab308",
+      0.62,
+      timingMeter.running ? "#86efac" : "#fef08a"
+    );
+
+    this.timingMeterCursor!.position.set(baseX + cursorOffsetX, meterY, -0.84);
+    this.timingMeterCursor!.scaling.set(0.34, 0.9, 1);
+    this.timingMeterCursor!.material = this.getMaterial(
+      "timing-cursor",
+      "#f8fafc",
+      1,
+      "#ffffff"
+    );
+  }
+
   private updateClouds(windForce: number): void {
     const width = this.activeWidth;
 
@@ -357,6 +433,96 @@ export class ArenaRenderer {
     };
   }
 
+  private ensureTimingMeter(): void {
+    if (!this.timingMeterBar) {
+      this.timingMeterBar = CreateBox(
+        "timing-meter-bar",
+        { width: 1, height: 1, depth: 0.35 },
+        this.scene
+      );
+      this.timingMeterBar.material = this.getMaterial(
+        "timing-bar",
+        "#020617",
+        0.5,
+        "#1e293b"
+      );
+    }
+
+    if (!this.timingMeterSweetZone) {
+      this.timingMeterSweetZone = CreateBox(
+        "timing-meter-sweet-zone",
+        { width: 1, height: 1, depth: 0.34 },
+        this.scene
+      );
+      this.timingMeterSweetZone.material = this.getMaterial(
+        "timing-sweet-ready",
+        "#eab308",
+        0.62,
+        "#fef08a"
+      );
+    }
+
+    if (!this.timingMeterCursor) {
+      this.timingMeterCursor = CreateBox(
+        "timing-meter-cursor",
+        { width: 1, height: 1, depth: 0.36 },
+        this.scene
+      );
+      this.timingMeterCursor.material = this.getMaterial(
+        "timing-cursor",
+        "#f8fafc",
+        1,
+        "#ffffff"
+      );
+    }
+  }
+
+  private ensureWarthog(): void {
+    if (this.warthogRoot) {
+      return;
+    }
+
+    const root = new TransformNode("airstrike-warthog-root", this.scene);
+
+    const body = CreateBox(
+      "airstrike-warthog-body",
+      { width: 3.6, height: 0.45, depth: 0.72 },
+      this.scene
+    );
+    body.parent = root;
+    body.material = this.getMaterial("warthog-body", "#94a3b8", 1, "#cbd5e1");
+
+    const wings = CreateBox(
+      "airstrike-warthog-wings",
+      { width: 2.2, height: 0.16, depth: 2.45 },
+      this.scene
+    );
+    wings.parent = root;
+    wings.position.set(0.12, 0.05, 0);
+    wings.material = this.getMaterial("warthog-wings", "#64748b", 1, "#94a3b8");
+
+    const tail = CreateBox(
+      "airstrike-warthog-tail",
+      { width: 0.8, height: 0.24, depth: 0.52 },
+      this.scene
+    );
+    tail.parent = root;
+    tail.position.set(-1.55, 0.35, 0);
+    tail.material = this.getMaterial("warthog-tail", "#475569", 1, "#64748b");
+
+    const nose = CreateBox(
+      "airstrike-warthog-nose",
+      { width: 0.9, height: 0.32, depth: 0.52 },
+      this.scene
+    );
+    nose.parent = root;
+    nose.position.set(2, 0.04, 0);
+    nose.material = this.getMaterial("warthog-nose", "#cbd5e1", 1, "#f8fafc");
+
+    root.setEnabled(false);
+    this.warthogRoot = root;
+  }
+
   private createClouds(): void {
     for (let index = 0; index < 5; index += 1) {
       const cloud = CreateBox(
@@ -388,6 +554,10 @@ export class ArenaRenderer {
     this.activeTankMarker?.setEnabled(false);
     this.activeTankBeam?.dispose();
     this.activeTankBeam = null;
+    this.warthogRoot?.setEnabled(false);
+    this.timingMeterBar?.setEnabled(false);
+    this.timingMeterSweetZone?.setEnabled(false);
+    this.timingMeterCursor?.setEnabled(false);
   }
 
   private updateCameraBounds(arenaWidth: number, arenaHeight: number): void {
@@ -405,7 +575,10 @@ export class ArenaRenderer {
     }
 
     const centerX = arenaWidth / 2;
-    const terrainMid = (this.activeTerrainMin + this.activeTerrainMax) / 2;
+    // Deep craters can produce single-sample outliers near the floor.
+    // Ignore those lows for camera framing so heavy impacts do not snap the whole view.
+    const stabilizedTerrainMin = Math.max(this.activeTerrainMin, this.activeFloor + 6);
+    const terrainMid = (stabilizedTerrainMin + this.activeTerrainMax) / 2;
     const desiredTerrainBand = 0.38;
     const unclampedBottom = terrainMid - viewHeight * desiredTerrainBand;
     const bottom = clamp(unclampedBottom, this.activeFloor - 22, this.activeFloor - 7);

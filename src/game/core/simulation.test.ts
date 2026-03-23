@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolveAirStrikeTiming } from "./airStrike";
 import {
   FIXED_STEP_SECONDS,
   TANK_BODY_HEIGHT,
@@ -63,6 +64,94 @@ test("friendly fire gives no money and reduces score", () => {
   assert.ok(attacker.score < initialScore);
 });
 
+test("air strike uses strafe-style delayed projectiles with run metadata", () => {
+  const match = createTestMatch(false);
+  const attacker = match.tanks[0];
+
+  attacker.weaponInventory.basicShell = 0;
+  attacker.weaponInventory.airStrike = 1;
+  attacker.selectedWeaponId = "airStrike";
+  match.activeTankIndex = 0;
+
+  applyCommand(match, { type: "fire", targetX: 78, airStrikeAccuracy: 0.95 });
+
+  assert.equal(match.projectiles.length, 5);
+  assert.ok(match.airStrikeRun);
+  assert.ok(Math.abs(match.projectiles[0].vx) > 1);
+  assert.ok(match.projectiles.some((projectile) => projectile.spawnDelay > 0));
+
+  const xs = match.projectiles.map((projectile) => projectile.x);
+  const spread = Math.max(...xs) - Math.min(...xs);
+
+  assert.ok(spread > 8);
+});
+
+test("air strike impacts resolve over time instead of in one instant", () => {
+  const match = createTestMatch(false);
+  const attacker = match.tanks[0];
+
+  attacker.weaponInventory.basicShell = 0;
+  attacker.weaponInventory.airStrike = 1;
+  attacker.selectedWeaponId = "airStrike";
+  match.activeTankIndex = 0;
+
+  applyCommand(match, { type: "fire", targetX: 84, airStrikeAccuracy: 0.65 });
+
+  let sawExplosionWhileProjectilesRemained = false;
+
+  for (let index = 0; index < 360 && match.phase === "resolving"; index += 1) {
+    stepMatch(match, FIXED_STEP_SECONDS);
+
+    if (match.explosions.length > 0 && match.projectiles.length > 0) {
+      sawExplosionWhileProjectilesRemained = true;
+      break;
+    }
+  }
+
+  assert.equal(sawExplosionWhileProjectilesRemained, true);
+});
+
+test("air strike run direction is deterministic for same seed and turn", () => {
+  const matchA = createTestMatch(false);
+  const matchB = createTestMatch(false);
+
+  for (const match of [matchA, matchB]) {
+    const attacker = match.tanks[0];
+    attacker.weaponInventory.basicShell = 0;
+    attacker.weaponInventory.airStrike = 1;
+    attacker.selectedWeaponId = "airStrike";
+    match.activeTankIndex = 0;
+    applyCommand(match, { type: "fire", targetX: 72, airStrikeAccuracy: 0.8 });
+  }
+
+  assert.ok(matchA.airStrikeRun && matchB.airStrikeRun);
+  assert.equal(matchA.airStrikeRun?.direction, matchB.airStrikeRun?.direction);
+  assert.equal(Math.sign(matchA.projectiles[0].vx), Math.sign(matchB.projectiles[0].vx));
+});
+
+test("timing center lock keeps air strike close to target", () => {
+  const timing = resolveAirStrikeTiming(70, 0.5, 140);
+
+  assert.ok(Math.abs(timing.offset) < 0.01);
+  assert.equal(timing.feedback, "Perfect");
+});
+
+test("timing farther from center increases miss offset", () => {
+  const near = resolveAirStrikeTiming(70, 0.58, 140);
+  const far = resolveAirStrikeTiming(70, 0.95, 140);
+
+  assert.ok(Math.abs(far.offset) > Math.abs(near.offset));
+  assert.ok(far.accuracy < near.accuracy);
+});
+
+test("timing side of center controls left or right offset direction", () => {
+  const left = resolveAirStrikeTiming(70, 0.2, 140);
+  const right = resolveAirStrikeTiming(70, 0.8, 140);
+
+  assert.ok(left.offset < 0);
+  assert.ok(right.offset > 0);
+});
+
 test("explosions continue decaying during command phase", () => {
   const match = createTestMatch(false);
   match.phase = "command";
@@ -120,6 +209,22 @@ test("steep shots can travel above the arena without triggering a ceiling hit", 
   assert.equal(match.phase, "resolving");
   assert.equal(match.projectiles.length, 1);
   assert.equal(match.explosions.length, 0);
+});
+
+test("basic shells do not deform terrain", () => {
+  const match = createTestMatch(false);
+  const attacker = match.tanks[0];
+  const terrainBefore = [...match.terrain.samples];
+
+  attacker.selectedWeaponId = "basicShell";
+  attacker.angleDeg = 48;
+  attacker.power = 56;
+  match.activeTankIndex = 0;
+
+  applyCommand(match, { type: "fire" });
+  runUntilResolved(match);
+
+  assert.deepEqual(match.terrain.samples, terrainBefore);
 });
 
 function createTestMatch(teamMode: boolean) {

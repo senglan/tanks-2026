@@ -13,6 +13,12 @@ import {
   getActiveTank,
   stepMatch
 } from "./simulation";
+import {
+  AIRSTRIKE_TIMING_SWEET_CENTER,
+  AIRSTRIKE_TIMING_SWEET_WIDTH,
+  advancePingPongMeter,
+  resolveAirStrikeTiming
+} from "./airStrike";
 import type {
   AppState,
   MatchCommand,
@@ -104,6 +110,7 @@ export class AppController {
     this.commandRepeatAccumulator += deltaSeconds;
     this.simulationAccumulator += deltaSeconds;
 
+    this.updateAirStrikeTiming(deltaSeconds);
     this.processMatchFlow(deltaSeconds);
     this.processScreenAutomation(deltaSeconds);
     this.shell.render({
@@ -118,7 +125,10 @@ export class AppController {
     this.renderer.render({
       match: this.state.session?.currentRound ?? null,
       targetPreviewX: this.targetPreviewX,
-      targeting: this.state.inputMode.kind === "targeting"
+      targeting:
+        this.state.inputMode.kind === "targeting" ||
+        this.state.inputMode.kind === "airStrikeTiming",
+      timingMeter: this.getTimingMeterRenderState()
     });
   }
 
@@ -382,31 +392,31 @@ export class AppController {
         this.startMatchSession();
         return;
       case "matchFire":
-        if (!this.hasHumanTurnInput()) {
+        if (!this.canIssueNormalCommand()) {
           return;
         }
         this.handleFireIntent();
         return;
       case "matchDraw":
-        if (!this.hasHumanTurnInput()) {
+        if (!this.canIssueNormalCommand()) {
           return;
         }
         this.executeMatchCommand({ type: "declareDraw" });
         return;
       case "cycleWeapon":
-        if (!this.hasHumanTurnInput()) {
+        if (!this.canIssueNormalCommand()) {
           return;
         }
         this.executeMatchCommand({ type: "cycleWeapon", direction: action.direction });
         return;
       case "selectWeapon":
-        if (!this.hasHumanTurnInput()) {
+        if (!this.canIssueNormalCommand()) {
           return;
         }
         this.executeMatchCommand({ type: "selectWeapon", weaponId: action.weaponId });
         return;
       case "useItem":
-        if (!this.hasHumanTurnInput()) {
+        if (!this.canIssueNormalCommand()) {
           return;
         }
         this.handleItemIntent(action.itemId);
@@ -587,27 +597,149 @@ export class AppController {
   }
 
   private handlePointerClick(worldX: number): void {
-    if (this.state.inputMode.kind !== "targeting" || !this.hasHumanTurnInput()) {
+    if (!this.hasHumanTurnInput()) {
       return;
     }
 
     this.sound.touch();
 
-    if (this.state.inputMode.action === "teleport") {
-      this.executeMatchCommand({ type: "teleport", targetX: worldX });
-    } else {
-      this.executeMatchCommand({ type: "fire", targetX: worldX });
+    if (this.state.inputMode.kind === "airStrikeTiming") {
+      this.handleAirStrikeTimingClick();
+      return;
     }
 
-    this.state.inputMode = { kind: "normal" };
-    this.targetPreviewX = null;
+    if (this.state.inputMode.kind !== "targeting") {
+      return;
+    }
+
+    if (this.state.inputMode.action === "teleport") {
+      this.executeMatchCommand({ type: "teleport", targetX: worldX });
+      this.state.inputMode = { kind: "normal" };
+      this.targetPreviewX = null;
+      return;
+    }
+
+    this.state.inputMode = {
+      kind: "airStrikeTiming",
+      ownerTankId: this.state.inputMode.ownerTankId,
+      targetX: worldX,
+      phase: "ready",
+      meterValue: AIRSTRIKE_TIMING_SWEET_CENTER,
+      meterDirection: 1
+    };
+    this.targetPreviewX = worldX;
+    this.setMessage("Air Strike timing: click to start meter.");
   }
 
   private handlePointerHover(worldX: number | null): void {
-    this.targetPreviewX =
-      this.state.inputMode.kind === "targeting" && this.hasHumanTurnInput()
-        ? worldX
-        : null;
+    if (!this.hasHumanTurnInput()) {
+      this.targetPreviewX = null;
+      return;
+    }
+
+    if (this.state.inputMode.kind === "targeting") {
+      this.targetPreviewX = worldX;
+      return;
+    }
+
+    if (this.state.inputMode.kind === "airStrikeTiming") {
+      this.targetPreviewX = this.state.inputMode.targetX;
+      return;
+    }
+
+    this.targetPreviewX = null;
+  }
+
+  private handleAirStrikeTimingClick(): void {
+    const match = this.state.session?.currentRound;
+    const mode = this.state.inputMode;
+
+    if (!match || mode.kind !== "airStrikeTiming") {
+      return;
+    }
+
+    if (mode.phase === "ready") {
+      mode.phase = "running";
+      mode.meterValue = AIRSTRIKE_TIMING_SWEET_CENTER;
+      mode.meterDirection = 1;
+      this.sound.playUiClick();
+      this.setMessage("Air Strike timing: lock near the center band.");
+      return;
+    }
+
+    const timing = resolveAirStrikeTiming(mode.targetX, mode.meterValue, match.arenaWidth);
+
+    this.executeMatchCommand(
+      {
+        type: "fire",
+        targetX: timing.adjustedTargetX,
+        airStrikeAccuracy: timing.accuracy,
+        airStrikeFeedback: timing.feedback
+      },
+      true
+    );
+    this.state.inputMode = { kind: "normal" };
+    this.targetPreviewX = null;
+    this.setMessage(`Air Strike ${timing.feedback}.`);
+  }
+
+  private updateAirStrikeTiming(deltaSeconds: number): void {
+    const mode = this.state.inputMode;
+
+    if (mode.kind !== "airStrikeTiming") {
+      return;
+    }
+
+    const match = this.state.session?.currentRound;
+    const activeTank = match ? getActiveTank(match) : null;
+
+    if (
+      !match ||
+      !activeTank ||
+      !this.hasHumanTurnInput() ||
+      activeTank.id !== mode.ownerTankId ||
+      activeTank.selectedWeaponId !== "airStrike"
+    ) {
+      this.state.inputMode = { kind: "normal" };
+      this.targetPreviewX = null;
+      return;
+    }
+
+    this.targetPreviewX = mode.targetX;
+
+    if (mode.phase !== "running") {
+      return;
+    }
+
+    const next = advancePingPongMeter(
+      mode.meterValue,
+      mode.meterDirection,
+      deltaSeconds
+    );
+    mode.meterValue = next.meterValue;
+    mode.meterDirection = next.meterDirection;
+  }
+
+  private getTimingMeterRenderState(): {
+    targetX: number;
+    meterValue: number;
+    sweetCenter: number;
+    sweetWidth: number;
+    running: boolean;
+  } | null {
+    const mode = this.state.inputMode;
+
+    if (mode.kind !== "airStrikeTiming") {
+      return null;
+    }
+
+    return {
+      targetX: mode.targetX,
+      meterValue: mode.meterValue,
+      sweetCenter: AIRSTRIKE_TIMING_SWEET_CENTER,
+      sweetWidth: AIRSTRIKE_TIMING_SWEET_WIDTH,
+      running: mode.phase === "running"
+    };
   }
 
   private executeMatchCommand(command: MatchCommand, quiet = false): void {
@@ -677,13 +809,19 @@ export class AppController {
   }
 
   private getTargetingLabel(): string | null {
-    if (this.state.inputMode.kind !== "targeting") {
-      return null;
+    if (this.state.inputMode.kind === "targeting") {
+      return this.state.inputMode.action === "teleport"
+        ? "Teleport targeting: click terrain, ESC to cancel"
+        : "Air Strike targeting: click a column, ESC to cancel";
     }
 
-    return this.state.inputMode.action === "teleport"
-      ? "Teleport targeting: click terrain, ESC to cancel"
-      : "Air Strike targeting: click a column, ESC to cancel";
+    if (this.state.inputMode.kind === "airStrikeTiming") {
+      return this.state.inputMode.phase === "ready"
+        ? "Air Strike timing: click to start meter, ESC to cancel"
+        : "Air Strike timing: click again to lock, ESC to cancel";
+    }
+
+    return null;
   }
 
   private setMessage(message: string): void {
@@ -692,6 +830,23 @@ export class AppController {
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (this.state.screen !== "match" || !this.hasHumanTurnInput()) {
+      return;
+    }
+
+    if (event.key === "Escape") {
+      if (
+        this.state.inputMode.kind === "targeting" ||
+        this.state.inputMode.kind === "airStrikeTiming"
+      ) {
+        this.state.inputMode = { kind: "normal" };
+        this.targetPreviewX = null;
+        this.setMessage("Targeting canceled.");
+      }
+      event.preventDefault();
+      return;
+    }
+
+    if (this.state.inputMode.kind !== "normal") {
       return;
     }
 
@@ -748,14 +903,6 @@ export class AppController {
         this.handleFireIntent();
         event.preventDefault();
         break;
-      case "Escape":
-        if (this.state.inputMode.kind === "targeting") {
-          this.state.inputMode = { kind: "normal" };
-          this.targetPreviewX = null;
-          this.setMessage("Targeting canceled.");
-        }
-        event.preventDefault();
-        break;
       default:
         break;
     }
@@ -806,6 +953,10 @@ export class AppController {
     }
 
     return getActiveTank(match)?.controller === "human";
+  }
+
+  private canIssueNormalCommand(): boolean {
+    return this.hasHumanTurnInput() && this.state.inputMode.kind === "normal";
   }
 
   private clearHumanTurnState(): void {

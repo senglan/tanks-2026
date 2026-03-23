@@ -2,6 +2,8 @@ import {
   DEFAULT_ANGLE,
   DEFAULT_ARENA_HEIGHT,
   DEFAULT_ARENA_WIDTH,
+  DEFAULT_BASE_FUEL,
+  DEFAULT_BASE_HP,
   DEFAULT_POWER,
   DEFAULT_ROUND_LIMIT,
   POWER_MAX,
@@ -143,6 +145,7 @@ export function startNextRound(session: MatchSession): MatchState {
     turnNumber: 1,
     projectiles: [],
     explosions: [],
+    airStrikeRun: null,
     outcome: null,
     announcement: `${tanks[roundNumber % tanks.length].displayName} to act`
   };
@@ -331,16 +334,18 @@ function createRoundTankState(
 ): TankState {
   const surface = resolveSurfaceInfo(terrain, spawnX);
   const angleDeg = spawnX < arenaWidth / 2 ? DEFAULT_ANGLE : 180 - DEFAULT_ANGLE;
+  const maxHp = Math.max(DEFAULT_BASE_HP, getMaxHp(tank.upgrades));
+  const roundFuel = Math.max(DEFAULT_BASE_FUEL, getRoundFuel(tank.upgrades));
 
   return {
     ...tank,
     x: surface.x,
     y: surface.y,
     tiltDeg: surface.tiltDeg,
-    currentHp: getMaxHp(tank.upgrades),
-    maxHp: getMaxHp(tank.upgrades),
-    currentFuel: getRoundFuel(tank.upgrades),
-    baseFuel: getRoundFuel(tank.upgrades),
+    currentHp: maxHp,
+    maxHp,
+    currentFuel: roundFuel,
+    baseFuel: roundFuel,
     angleDeg,
     power: clamp(DEFAULT_POWER, POWER_MIN, POWER_MAX),
     selectedWeaponId: pickFirstAvailableWeapon(tank.weaponInventory),

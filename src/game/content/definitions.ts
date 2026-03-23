@@ -100,8 +100,8 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     spreadDeg: 0,
     damage: 30,
     splashRadius: 4.5,
-    terrainRadius: 4.75,
-    terrainDepth: 3.8,
+    terrainRadius: 0,
+    terrainDepth: 0,
     muzzleVelocity: 48,
     blastColor: "#ffbe63"
   },

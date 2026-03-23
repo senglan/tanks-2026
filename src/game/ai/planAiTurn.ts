@@ -6,8 +6,17 @@ import {
   WEAPONS,
   WEAPON_ORDER
 } from "../content/definitions";
+import {
+  getAiAirStrikeTimingValue,
+  resolveAirStrikeTiming
+} from "../core/airStrike";
 import { createSeededRandom } from "../core/random";
-import { estimateShotCommandScore, getActiveTank } from "../core/simulation";
+import {
+  applyCommand,
+  cloneMatchState,
+  estimateShotCommandScore,
+  getActiveTank
+} from "../core/simulation";
 import type {
   MatchCommand,
   MatchState,
@@ -24,6 +33,17 @@ interface DifficultyConfig {
   executionAngleJitter: number;
   executionPowerJitter: number;
   executionTargetJitter: number;
+  awayShotPenalty: number;
+}
+
+interface PlannedShot {
+  weaponId: WeaponId;
+  score: number;
+  angleDeg: number;
+  power: number;
+  targetX?: number;
+  airStrikeAccuracy?: number;
+  airStrikeFeedback?: "Perfect" | "Good" | "Off";
 }
 
 const DIFFICULTY_CONFIG: Record<TankState["aiDifficulty"], DifficultyConfig> = {
@@ -35,7 +55,8 @@ const DIFFICULTY_CONFIG: Record<TankState["aiDifficulty"], DifficultyConfig> = {
     targetJitter: 5,
     executionAngleJitter: 7,
     executionPowerJitter: 9,
-    executionTargetJitter: 6
+    executionTargetJitter: 6,
+    awayShotPenalty: 28
   },
   medium: {
     angleStep: 10,
@@ -45,7 +66,8 @@ const DIFFICULTY_CONFIG: Record<TankState["aiDifficulty"], DifficultyConfig> = {
     targetJitter: 4,
     executionAngleJitter: 3,
     executionPowerJitter: 4,
-    executionTargetJitter: 3.5
+    executionTargetJitter: 3.5,
+    awayShotPenalty: 24
   },
   hard: {
     angleStep: 5,
@@ -55,7 +77,8 @@ const DIFFICULTY_CONFIG: Record<TankState["aiDifficulty"], DifficultyConfig> = {
     targetJitter: 1.5,
     executionAngleJitter: 0.75,
     executionPowerJitter: 1,
-    executionTargetJitter: 1
+    executionTargetJitter: 1,
+    awayShotPenalty: 18
   }
 };
 
@@ -93,7 +116,7 @@ export function planAiTurn(match: MatchState): MatchCommand[] {
   }
 
   const target = pickTarget(tank, enemies);
-  const bestShot = findBestShot(match, tank, target, difficulty, random);
+  let bestShot = findBestShot(match, tank, target, difficulty, random);
 
   if (!bestShot) {
     if (tank.currentFuel >= 3) {
@@ -104,16 +127,58 @@ export function planAiTurn(match: MatchState): MatchCommand[] {
     return [...commands, { type: "fire" }];
   }
 
-  const plannedShot = applyExecutionVariance(bestShot, match, difficulty, random);
+  let shotContext = match;
+  let actingTank = tank;
 
-  if (plannedShot.score < 16 && tank.currentFuel >= 5) {
+  if (bestShot.score < 16 && tank.currentFuel >= 5) {
     const direction = target.x > tank.x ? 1 : -1;
     const steps = 2 + Math.floor(random() * 3);
+    const movedState = cloneMatchState(match);
+    let moved = false;
 
     for (let index = 0; index < steps; index += 1) {
-      commands.push({ type: "move", direction });
+      const moveCommand: MatchCommand = { type: "move", direction };
+      const result = applyCommand(movedState, moveCommand);
+
+      if (result.endsWith("moved.")) {
+        commands.push(moveCommand);
+        moved = true;
+        continue;
+      }
+
+      break;
+    }
+
+    if (moved) {
+      const movedTank = getActiveTank(movedState);
+      const movedTarget =
+        movedState.tanks.find((candidate) => candidate.id === target.id) ?? null;
+
+      if (movedTank && movedTarget) {
+        const refinedShot = findBestShot(
+          movedState,
+          movedTank,
+          movedTarget,
+          difficulty,
+          random
+        );
+
+        if (refinedShot) {
+          bestShot = refinedShot;
+          shotContext = movedState;
+          actingTank = movedTank;
+        }
+      }
     }
   }
+
+  const plannedShot = applyExecutionVariance(
+    bestShot,
+    shotContext,
+    difficulty,
+    tank.aiDifficulty,
+    random
+  );
 
   if (plannedShot.weaponId !== tank.selectedWeaponId) {
     commands.push({ type: "selectWeapon", weaponId: plannedShot.weaponId });
@@ -121,15 +186,20 @@ export function planAiTurn(match: MatchState): MatchCommand[] {
 
   commands.push({
     type: "adjustAngle",
-    delta: plannedShot.angleDeg - tank.angleDeg
+    delta: plannedShot.angleDeg - actingTank.angleDeg
   });
   commands.push({
     type: "adjustPower",
-    delta: plannedShot.power - tank.power
+    delta: plannedShot.power - actingTank.power
   });
 
   if (typeof plannedShot.targetX === "number") {
-    commands.push({ type: "fire", targetX: plannedShot.targetX });
+    commands.push({
+      type: "fire",
+      targetX: plannedShot.targetX,
+      airStrikeAccuracy: plannedShot.airStrikeAccuracy,
+      airStrikeFeedback: plannedShot.airStrikeFeedback
+    });
   } else {
     commands.push({ type: "fire" });
   }
@@ -143,22 +213,8 @@ function findBestShot(
   target: TankState,
   difficulty: DifficultyConfig,
   random: () => number
-): {
-  weaponId: WeaponId;
-  score: number;
-  angleDeg: number;
-  power: number;
-  targetX?: number;
-} | null {
-  let bestShot:
-    | {
-        weaponId: WeaponId;
-        score: number;
-        angleDeg: number;
-        power: number;
-        targetX?: number;
-      }
-    | null = null;
+): PlannedShot | null {
+  let bestShot: PlannedShot | null = null;
 
   for (const weaponId of WEAPON_ORDER) {
     if (!hasWeaponAmmo(tank, weaponId)) {
@@ -195,12 +251,18 @@ function findBestShot(
       for (let power = 28; power <= 84; power += difficulty.powerStep) {
         const candidateAngle = angle + jitter(random, difficulty.angleJitter);
         const candidatePower = power + jitter(random, difficulty.powerJitter);
-        const score = estimateShotCommandScore(
-          match,
-          tank.id,
-          weaponId,
+        const score = adjustNonTargetedShotScore(
+          estimateShotCommandScore(
+            match,
+            tank.id,
+            weaponId,
+            candidateAngle,
+            candidatePower
+          ),
           candidateAngle,
-          candidatePower
+          tank,
+          target,
+          difficulty
         );
 
         if (!bestShot || score > bestShot.score) {
@@ -218,25 +280,58 @@ function findBestShot(
   return bestShot;
 }
 
+function adjustNonTargetedShotScore(
+  score: number,
+  angleDeg: number,
+  tank: TankState,
+  target: TankState,
+  difficulty: DifficultyConfig
+): number {
+  if (!Number.isFinite(score)) {
+    return score;
+  }
+
+  if (isShotHeadingAwayFromTarget(angleDeg, target.x - tank.x)) {
+    return score - difficulty.awayShotPenalty;
+  }
+
+  return score;
+}
+
+function isShotHeadingAwayFromTarget(angleDeg: number, horizontalDelta: number): boolean {
+  if (Math.abs(horizontalDelta) < 0.75) {
+    return false;
+  }
+
+  const launchDirection = Math.cos((angleDeg * Math.PI) / 180);
+
+  if (Math.abs(launchDirection) < 0.08) {
+    return false;
+  }
+
+  return Math.sign(launchDirection) !== Math.sign(horizontalDelta);
+}
+
 function applyExecutionVariance(
-  shot: {
-    weaponId: WeaponId;
-    score: number;
-    angleDeg: number;
-    power: number;
-    targetX?: number;
-  },
+  shot: PlannedShot,
   match: MatchState,
   difficulty: DifficultyConfig,
+  aiDifficulty: TankState["aiDifficulty"],
   random: () => number
-): {
-  weaponId: WeaponId;
-  score: number;
-  angleDeg: number;
-  power: number;
-  targetX?: number;
-} {
+): PlannedShot {
   if (typeof shot.targetX === "number") {
+    if (shot.weaponId === "airStrike") {
+      const meterValue = getAiAirStrikeTimingValue(aiDifficulty, random);
+      const timing = resolveAirStrikeTiming(shot.targetX, meterValue, match.arenaWidth);
+
+      return {
+        ...shot,
+        targetX: timing.adjustedTargetX,
+        airStrikeAccuracy: timing.accuracy,
+        airStrikeFeedback: timing.feedback
+      };
+    }
+
     return {
       ...shot,
       targetX: clamp(

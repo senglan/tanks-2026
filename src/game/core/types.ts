@@ -150,6 +150,21 @@ export interface ExplosionState {
   ttl: number;
 }
 
+export type AirStrikeDirection = -1 | 1;
+
+export interface AirStrikeRunState {
+  id: string;
+  ownerTankId: string;
+  direction: AirStrikeDirection;
+  centerX: number;
+  startX: number;
+  endX: number;
+  entryY: number;
+  diveDepth: number;
+  elapsed: number;
+  duration: number;
+}
+
 export interface RoundOutcome {
   kind: "victory" | "draw";
   winningTeamId: string | null;
@@ -188,6 +203,7 @@ export interface MatchState {
   turnNumber: number;
   projectiles: ProjectileState[];
   explosions: ExplosionState[];
+  airStrikeRun: AirStrikeRunState | null;
   outcome: RoundOutcome | null;
   announcement: string;
 }
@@ -199,7 +215,12 @@ export type MatchCommand =
   | { type: "cycleWeapon"; direction: -1 | 1 }
   | { type: "selectWeapon"; weaponId: WeaponId }
   | { type: "useItem"; itemId: "shield" | "repairKit" }
-  | { type: "fire"; targetX?: number }
+  | {
+      type: "fire";
+      targetX?: number;
+      airStrikeAccuracy?: number;
+      airStrikeFeedback?: "Perfect" | "Good" | "Off";
+    }
   | { type: "teleport"; targetX: number }
   | { type: "declareDraw" };
 
@@ -209,6 +230,14 @@ export type InputMode =
       kind: "targeting";
       action: "teleport" | "airStrike";
       ownerTankId: string;
+    }
+  | {
+      kind: "airStrikeTiming";
+      ownerTankId: string;
+      targetX: number;
+      phase: "ready" | "running";
+      meterValue: number;
+      meterDirection: -1 | 1;
     };
 
 export interface WeaponDefinition {
